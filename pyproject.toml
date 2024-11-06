@@ -1,0 +1,41 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "tune_nix_eval"
+version = "0.1.0"
+authors = [{ name = "Connor Baker", email = "ConnorBaker01@gmail.com" }]
+requires-python = ">=3.13"
+license = { text = "BSD-3-Clause" }
+description = "Tune Nix expression evaluation"
+dependencies = ["annotated-types", "pydantic", "optuna", "rich"]
+
+[project.optional-dependencies]
+dev = ["ruff"]
+
+[project.scripts]
+update-custom-index = "tune_nix_eval.cmd:main.main"
+
+[project.urls]
+Homepage = "https://github.com/ConnorBaker/tune-nix-eval"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+preview = true
+
+[tool.ruff.lint]
+preview = true
+select = ["F", "E", "W", "I", "PL", "FURB", "LOG", "RUF", "G", "TID"]
+ignore = [
+  "PLR0913", # Ignore functions with many arguments (I like currying)
+  "PLR0911", # Ignore functions with many return arguments (match statements)
+]
+
+[tool.pyright]
+include = ["./tune_nix_eval"]
+pythonVersion = "3.13"
+pythonPlatform = "Linux"
+typeCheckingMode = "strict"

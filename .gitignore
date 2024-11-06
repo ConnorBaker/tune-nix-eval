@@ -3,3 +3,5 @@ __pycache__
 result
 result-*
 .direnv
+*.db
+.vscode
