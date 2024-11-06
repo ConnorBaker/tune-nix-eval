@@ -3,14 +3,12 @@ import os
 from collections.abc import Iterable, Mapping
 from logging import Logger
 from subprocess import run
-from tempfile import NamedTemporaryFile
 from typing import Final
 
 from pydantic.alias_generators import to_camel
 
 from tune_nix_eval.extra_pydantic import PydanticObject
 from tune_nix_eval.logger import get_logger
-from tune_nix_eval.nix.eval.stats import NixEvalStats
 from tune_nix_eval.nix.utilities import show_attr_path
 
 LOGGER: Final[Logger] = get_logger(__name__)
@@ -22,7 +20,7 @@ class NixBuildResult(PydanticObject, alias_generator=to_camel):
         outputs: Mapping[str, str]
 
     stderr: str
-    value: NixBuildResultSingleton
+    value: None | NixBuildResultSingleton
 
 
 def build(flakeref: str, attr_path: Iterable[str], output: str = "*") -> NixBuildResult:
@@ -51,12 +49,14 @@ def build(flakeref: str, attr_path: Iterable[str], output: str = "*") -> NixBuil
     )
     kwargs["stderr"] = proc.stderr.decode()
     if proc.returncode != 0:
-        LOGGER.error("Evaluation failed: %s", kwargs["stderr"])
+        LOGGER.error("Build failed: %s", kwargs["stderr"])
         kwargs["value"] = None
     else:
         kwargs["value"] = json.loads(proc.stdout)
 
     match kwargs["value"]:
+        case None:
+            pass
         case [value]:
             kwargs["value"] = value
         case _:

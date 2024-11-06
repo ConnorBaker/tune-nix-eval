@@ -9,7 +9,7 @@ authors = [{ name = "Connor Baker", email = "ConnorBaker01@gmail.com" }]
 requires-python = ">=3.13"
 license = { text = "BSD-3-Clause" }
 description = "Tune Nix expression evaluation"
-dependencies = ["annotated-types", "pydantic", "optuna", "rich"]
+dependencies = ["annotated-types", "pydantic", "optuna", "optuna-dashboard", "rich"]
 
 [project.optional-dependencies]
 dev = ["ruff"]

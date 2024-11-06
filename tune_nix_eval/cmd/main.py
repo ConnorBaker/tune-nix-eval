@@ -80,7 +80,6 @@ def objective(num_evals: int, flakeref: str, attr_path: Sequence[str], trial: Tr
         MemoryAllocator, trial.suggest_categorical("memory_allocator", sorted(MemoryAllocators))
     )
     env["LD_PRELOAD"] = get_memory_allocator_ld_preload(memory_allocator)
-    trial.set_user_attr("memory_allocator", memory_allocator)
 
     # Short-circuit if the trial is a duplicate.
     # Fetch all the trials to consider.
@@ -94,15 +93,20 @@ def objective(num_evals: int, flakeref: str, attr_path: Sequence[str], trial: Tr
     for i in range(num_evals):
         LOGGER.info("Running evaluation %d of %d", i + 1, num_evals)
         intermediate_result = tune_nix_eval.nix.eval.raw.eval(flakeref, attr_path, env=env)
-        trial.report(intermediate_result.stats.time.cpu, i)
+        if intermediate_result.value is None:
+            LOGGER.error("Evaluation failed: %s", intermediate_result.stderr)
+            trial.set_user_attr("stderr", intermediate_result.stderr)
+            raise optuna.TrialPruned()
 
         # if trial.should_prune():
         #     raise optuna.TrialPruned()
 
+        trial.report(intermediate_result.stats.time.cpu, i)
         results.append(intermediate_result)
 
     LOGGER.info("Generating statistics")
     description = NixEvalStatsDescription.of(result.stats for result in results)
+    trial.set_user_attr("stats", description.model_dump(mode="json"))
     return description.time.cpu.median
 
 
