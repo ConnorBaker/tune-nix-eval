@@ -10,7 +10,7 @@ LOGGER: Final[Logger] = get_logger(__name__)
 
 
 SystemProvidedMemoryAllocator = Literal["system"]
-SystemProvidedMemoryAllocators: Set[SystemProvidedMemoryAllocator] = set(SystemProvidedMemoryAllocator.__args__)
+SystemProvidedMemoryAllocators: Set[SystemProvidedMemoryAllocator] = set(SystemProvidedMemoryAllocator.__args__)  # type: ignore
 NixProvidedMemoryAllocator = Literal[
     "graphene-hardened-light",
     "graphene-hardened",

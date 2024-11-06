@@ -34,9 +34,10 @@ def build(flakeref: str, attr_path: Iterable[str], output: str = "*") -> NixBuil
             "nix",
             "build",
             # Configuration options
-            "--no-allow-import-from-derivation",
-            "--no-allow-unsafe-native-code-during-evaluation",
-            "--pure-eval",
+            # TODO(@connorbaker): Disabled for now.
+            # "--no-allow-import-from-derivation",
+            # "--no-allow-unsafe-native-code-during-evaluation",
+            # "--pure-eval",
             "--no-link",
             # Output format
             "--json",
