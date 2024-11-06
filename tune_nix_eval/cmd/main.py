@@ -54,15 +54,20 @@ def setup_argparse() -> ArgumentParser:
 
 
 def objective(num_evals: int, flakeref: str, attr_path: Sequence[str], trial: Trial) -> float:
-    # NOTE: Boehm GC just checks if the environment variable is set, not that it is set to a specific value.
     env: dict[str, str] = {
         # "GC_INITIAL_HEAP_SIZE": str(gc_initial_heap_size),
         # "GC_FREE_SPACE_DIVISOR": str(gc_free_space_divisor),
     }
 
-    # gc_dont_gc = trial.suggest_categorical("gc_dont_gc", [True, False])
+    # NOTE: Boehm GC just checks if the environment variable is set, not that it is set to a specific value.
+    gc_dont_gc = trial.suggest_categorical("gc_dont_gc", [True, False])
+    if gc_dont_gc:
+        env["GC_DONT_GC"] = "1"
+
     # Measured in bytes -- 32M through 8G
     # gc_initial_heap_size = trial.suggest_int("gc_initial_heap_size", 32 * 1024 * 1024, 8 * 1024 * 1024 * 1024, log=True)
+    # env["GC_INITIAL_HEAP_SIZE"] = str(gc_initial_heap_size)
+
     # GC_MAXIMUM_HEAP_SIZE is zero by default, which means unlimited.
 
     # GC_FREE_SPACE_DIVISOR is 3 by default.
@@ -72,6 +77,7 @@ def objective(num_evals: int, flakeref: str, attr_path: Sequence[str], trial: Tr
     #   the opposite effect.  Setting it to 1 will almost disable collections
     #   and cause all allocations to simply grow the heap.
     # gc_free_space_divisor = trial.suggest_int("gc_free_space_divisor", 1, 5)
+    # env["GC_FREE_SPACE_DIVISOR"] = str(gc_free_space_divisor)
 
     # GC_ENABLE_INCREMENTAL is off by default.
     # gc_enable_incremental = trial.suggest_categorical("gc_enable_incremental", [True, False])
@@ -146,7 +152,7 @@ def main() -> None:
     #     # https://github.com/NixOS/nix/blob/dfd0033afbbb12e6578ab3f1f026d15ff9dec132/src/libexpr/eval-gc.cc#L65
     #     "gc_initial_heap_size": 32 * 1024 * 1024,
     # })
-    study.enqueue_trial({"memory_allocator": "system"})
+    study.enqueue_trial({"memory_allocator": "system", "gc_dont_gc": False})
 
     objective_wrapper = partial(objective, args.num_evals, flakeref, attr_path)
 
