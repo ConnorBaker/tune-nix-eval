@@ -151,8 +151,12 @@ class Objective:
             intermediate_result = tune_nix_eval.nix.eval.raw.eval(
                 self.flakeref, self.attr_path, local_store=bypass_daemon, env=env, timeout=self.eval_timeout
             )
-            if intermediate_result.value is None:
-                LOGGER.error("Evaluation failed: %s", intermediate_result.stderr)
+
+            # Fail due to timeout
+            if intermediate_result is None:
+                raise optuna.TrialPruned()
+            # Fail due to eval error
+            elif intermediate_result.value is None:
                 trial.set_user_attr("stderr", intermediate_result.stderr)
                 raise optuna.TrialPruned()
 
