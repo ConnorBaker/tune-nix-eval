@@ -1,6 +1,7 @@
 import json
+import multiprocessing
+import multiprocessing.process
 import os
-import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from logging import Logger
@@ -19,34 +20,72 @@ from tune_nix_eval.nix.utilities import show_attr_path
 LOGGER: Final[Logger] = get_logger(__name__)
 
 
-class MemoryProcessStats(PydanticObject):
-    rss: int
-    vms: int
-    uss: int
-    pss: int
-    swap: int
+class ProcessStats(PydanticObject, extra="ignore"):
+    class Cpu(PydanticObject, extra="ignore"):
+        user: float
+        system: float
+        children_user: float
+        children_system: float
+        iowait: float
+
+    class Io(PydanticObject, extra="ignore"):
+        read_count: int
+        write_count: int
+        read_bytes: int
+        write_bytes: int
+        read_chars: int
+        write_chars: int
+
+    class Memory(PydanticObject, extra="ignore"):
+        rss: int
+        vms: int
+        uss: int
+        pss: int
+        swap: int
+
+    cpu: Cpu
+    io: None | Io
+    memory: Memory
+    time: float
 
 
 class RawNixEvalResult(PydanticObject, alias_generator=to_camel):
-    memory_stats: Sequence[MemoryProcessStats]
-    stats: NixEvalStats
+    nix_stats: NixEvalStats
+    process_stats: Sequence[ProcessStats]
     stderr: str
+    wall_time: float
     value: Any  # JSON object
 
 
 # Function to monitor memory usage
 # NOTE: Mutates memory_stats!
-def monitor_memory(pid: int, memory_stats: list[MemoryProcessStats], interval: float = 1.0) -> None:
-    assert memory_stats == []
-
+def monitor_process(
+    pid: int,
+    process_stats: list[ProcessStats],
+    interval: float = 1.0,
+) -> None:
     process = psutil.Process(pid)
     while process.is_running():
-        # Process may have been terminated between is_running() and memory_full_info()
+        # Process may have been terminated between is_running() and as_dict()
         try:
-            mem_info = process.memory_full_info()
+            info = process.as_dict(
+                attrs=[
+                    "cpu_times",
+                    "create_time",
+                    "io_counters",
+                    "memory_full_info",
+                ]
+            )
         except psutil.NoSuchProcess:
             break
-        memory_stats.append(MemoryProcessStats.model_validate(mem_info, from_attributes=True))
+
+        info["cpu"] = info.pop("cpu_times")._asdict()
+        # Sometimes we don't have IO counters
+        info["io"] = io_counters._asdict() if (io_counters := info.pop("io_counters", None)) is not None else None
+        info["memory"] = info.pop("memory_full_info")._asdict()
+        info["time"] = time.time() - info.pop("create_time")
+
+        process_stats.append(ProcessStats.model_validate(info))
         time.sleep(interval)
 
 
@@ -82,7 +121,7 @@ def eval(
     LOGGER.info("Evaluating %s", full_ref)
 
     kwargs = {}
-    with NamedTemporaryFile() as stats_file:
+    with NamedTemporaryFile() as stats_file, multiprocessing.Manager() as manager:
         proc = psutil.Popen(
             args=[
                 "nix",
@@ -114,32 +153,26 @@ def eval(
 
         # Start monitoring memory usage
         # NOTE: memory_stats is mutated by monitor_memory.
-        memory_stats: list[MemoryProcessStats] = []
-        monitor_thread = threading.Thread(
-            target=monitor_memory,
-            args=(
-                proc.pid,
-                memory_stats,
-            ),
-        )
+        process_stats = manager.list()
+        monitor = multiprocessing.Process(target=monitor_process, args=(proc.pid, process_stats))
 
         # Wait for the process to finish
         try:
-            monitor_thread.start()
+            monitor.start()
             returncode = proc.wait(timeout)
-            monitor_thread.join()
+            monitor.join(timeout)  # Re-use timeout here as a default, although it should be much faster
         except psutil.TimeoutExpired:
             LOGGER.error("Evaluation timed out")
             proc.kill()
-            try:
-                monitor_thread.join(0.0)
-            except psutil.TimeoutExpired:
-                pass
+            monitor.terminate()
             return None
 
-        kwargs["memory_stats"] = memory_stats
-        kwargs["stats"] = NixEvalStats.model_validate_json(stats_file.read())
+        # Convert back to normal list
+        kwargs["process_stats"] = list(process_stats)
+        kwargs["nix_stats"] = NixEvalStats.model_validate_json(stats_file.read())
         kwargs["stderr"] = str(proc.stderr.read())
+        kwargs["wall_time"] = time.time() - proc.create_time()
+        LOGGER.info("Evaluation completed in %.2fs", kwargs["wall_time"])
         if returncode != 0:
             LOGGER.error("Evaluation failed: %s", kwargs["stderr"])
             kwargs["value"] = None

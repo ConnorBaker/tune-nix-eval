@@ -1,57 +1,61 @@
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from math import sqrt
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from pydantic.alias_generators import to_camel
 
 from tune_nix_eval.extra_pydantic import PydanticObject
 
+# Don't actually import this to prevent circular imports
+if TYPE_CHECKING:
+    from tune_nix_eval.nix.eval.raw import RawNixEvalResult
+
 
 class NixEvalStats(PydanticObject, alias_generator=to_camel):
-    class NixEvalStatsEnvs(PydanticObject, alias_generator=to_camel):
+    class Envs(PydanticObject, alias_generator=to_camel):
         bytes: int
         elements: int
         number: int
 
-    class NixEvalStatsGc(PydanticObject, alias_generator=to_camel):
+    class Gc(PydanticObject, alias_generator=to_camel):
         cycles: int
         heap_size: int
         total_bytes: int
 
-    class NixEvalStatsList(PydanticObject, alias_generator=to_camel):
+    class List(PydanticObject, alias_generator=to_camel):
         bytes: int
         concats: int
         elements: int
 
-    class NixEvalStatsSets(PydanticObject, alias_generator=to_camel):
+    class Sets(PydanticObject, alias_generator=to_camel):
         bytes: int
         elements: int
         number: int
 
-    class NixEvalStatsSizes(PydanticObject, alias_generator=to_camel):
+    class Sizes(PydanticObject, alias_generator=to_camel):
         Attr: int
         Bindings: int
         Env: int
         Value: int
 
-    class NixEvalStatsSymbols(PydanticObject, alias_generator=to_camel):
+    class Symbols(PydanticObject, alias_generator=to_camel):
         bytes: int
         number: int
 
-    class NixEvalStatsTime(PydanticObject, alias_generator=to_camel):
+    class Time(PydanticObject, alias_generator=to_camel):
         cpu: float
         gc: float
         gc_fraction: float
 
-    class NixEvalStatsValues(PydanticObject, alias_generator=to_camel):
+    class Values(PydanticObject, alias_generator=to_camel):
         bytes: int
         number: int
 
     cpu_time: float
-    envs: NixEvalStatsEnvs
-    gc: NixEvalStatsGc
-    list: NixEvalStatsList
+    envs: Envs
+    gc: Gc
+    list: List
     nr_avoided: int
     nr_exprs: int
     nr_function_calls: int
@@ -60,11 +64,11 @@ class NixEvalStats(PydanticObject, alias_generator=to_camel):
     nr_op_updates: int
     nr_prim_op_calls: int
     nr_thunks: int
-    sets: NixEvalStatsSets
-    sizes: NixEvalStatsSizes
-    symbols: NixEvalStatsSymbols
-    time: NixEvalStatsTime
-    values: NixEvalStatsValues
+    sets: Sets
+    sizes: Sizes
+    symbols: Symbols
+    time: Time
+    values: Values
 
 
 class StatsDescription(PydanticObject):
@@ -99,32 +103,35 @@ _RawStatsDescriptionResult = Mapping[str, "StatsDescription | _RawStatsDescripti
 
 
 class NixEvalStatsDescription(PydanticObject, alias_generator=to_camel):
-    class NixEvalStatsGcDescription(PydanticObject, alias_generator=to_camel):
+    class Gc(PydanticObject, alias_generator=to_camel):
         cycles: StatsDescription
         heap_size: StatsDescription
         total_bytes: StatsDescription
 
-    class NixEvalStatsTimeDescription(PydanticObject, alias_generator=to_camel):
+    class Time(PydanticObject, alias_generator=to_camel):
         cpu: StatsDescription
         gc: StatsDescription
         gc_fraction: StatsDescription
 
-    gc: NixEvalStatsGcDescription
-    time: NixEvalStatsTimeDescription
+    gc: Gc
+    time: Time
+    wall_time: StatsDescription
 
     @classmethod
-    def of(cls: type[Self], measurements: Iterable[NixEvalStats]) -> Self:
+    def of(cls: type[Self], results: "Iterable[RawNixEvalResult]") -> Self:
         """
         Create a new instance of the class using the statistics provided.
         """
-        gc_measurements: list[NixEvalStats.NixEvalStatsGc] = []
-        time_measurements: list[NixEvalStats.NixEvalStatsTime] = []
-        for measurement in measurements:
-            gc_measurements.append(measurement.gc)
-            time_measurements.append(measurement.time)
+        gc_measurements: list[NixEvalStats.Gc] = []
+        time_measurements: list[NixEvalStats.Time] = []
+        wall_time_measurements: list[float] = []
+        for result in results:
+            gc_measurements.append(result.nix_stats.gc)
+            time_measurements.append(result.nix_stats.time)
+            wall_time_measurements.append(result.wall_time)
 
         # measurements cannot be consumed twice
-        del measurements
+        del results
 
         def mkStatsDescription[T: PydanticObject](
             cls: type[T], measurements: Sequence[T]
@@ -140,6 +147,7 @@ class NixEvalStatsDescription(PydanticObject, alias_generator=to_camel):
             return kwargs
 
         return cls.model_validate({
-            "gc": mkStatsDescription(NixEvalStats.NixEvalStatsGc, gc_measurements),
-            "time": mkStatsDescription(NixEvalStats.NixEvalStatsTime, time_measurements),
+            "gc": mkStatsDescription(NixEvalStats.Gc, gc_measurements),
+            "time": mkStatsDescription(NixEvalStats.Time, time_measurements),
+            "wall_time": StatsDescription.of(wall_time_measurements),
         })

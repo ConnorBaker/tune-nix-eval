@@ -164,11 +164,11 @@ class Objective:
             # if trial.should_prune():
             #     raise optuna.TrialPruned()
 
-            trial.report(intermediate_result.stats.time.cpu, i)
+            trial.report(intermediate_result.wall_time, i)
             results.append(intermediate_result)
 
         LOGGER.info("Generating statistics")
-        description = NixEvalStatsDescription.of(result.stats for result in results)
+        description = NixEvalStatsDescription.of(results)
 
         LOGGER.info("Creating artifact")
         eval_results = NixEvalResults(results=results, description=description)
@@ -183,7 +183,7 @@ class Objective:
         )
 
         trial.set_user_attr("artifact_id", artifact_id)
-        return description.time.cpu.median
+        return description.wall_time.median
 
 
 def main() -> None:
