@@ -31,7 +31,8 @@
         inputs.git-hooks-nix.flakeModule
       ];
 
-      flake.overlay.default = final: _: {
+      flake.overlays.default = final: _: {
+        tune-nix-eval = final.python3Packages.callPackage ./package.nix { };
         hoard = final.callPackage ./hoard.nix { };
         mesh = final.callPackage ./mesh.nix { };
       };
@@ -40,11 +41,14 @@
         {
           config,
           pkgs,
-          system,
           ...
         }:
         {
-          legacyPackages = pkgs.extend inputs.self.overlay.default;
+          legacyPackages = pkgs.extend inputs.self.overlays.default;
+
+          packages = {
+            default = config.legacyPackages.tune-nix-eval;
+          };
 
           pre-commit.settings.hooks =
             let

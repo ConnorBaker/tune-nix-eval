@@ -1,19 +1,20 @@
 from argparse import ArgumentParser, Namespace
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from logging import Logger
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, Self, cast
 
 import optuna
 from optuna.artifacts import FileSystemArtifactStore, upload_artifact
+from optuna.pruners import WilcoxonPruner
 from optuna.samplers import BruteForceSampler
 from optuna.trial import Trial
 
 import tune_nix_eval.nix.build.raw
 import tune_nix_eval.nix.eval.raw
 from tune_nix_eval.extra_pydantic import PydanticObject
-from tune_nix_eval.logger import _HANDLER, get_logger
+from tune_nix_eval.logger import get_logger
 from tune_nix_eval.memory_allocators import (
     MemoryAllocator,
     MemoryAllocators,
@@ -28,13 +29,12 @@ LOGGER: Final[Logger] = get_logger(__name__)
 
 # TODO(@connorbaker):
 # 0. Set CPU governor to performance to avoid fluctuations in CPU frequency.
-# 1. Track wall time, which is not what Nix reports (due to IFD or GC pauses?).
-# 2. Tune zram and compression algorithm parameters
-# 3. Visualizations of memory usage (add snapshot time relative to program start to memory_stats)
+# 1. Tune zram and compression algorithm parameters
+# 2. Visualizations of memory usage (add snapshot time relative to program start to memory_stats)
 
 
 def setup_argparse() -> ArgumentParser:
-    parser = ArgumentParser(description="Does a thing")
+    parser = ArgumentParser(description="Runs a nix eval using various malloc replacements.")
     _ = parser.add_argument(
         "--num-trials",
         type=int,
@@ -87,6 +87,23 @@ class NixEvalResults(PydanticObject):
 
 
 @dataclass(frozen=True, slots=True, eq=True, order=True)
+class Params:
+    bypass_daemon: bool
+    gc_dont_gc: bool
+    memory_allocator: MemoryAllocator
+
+    @classmethod
+    def sample_from(cls: type[Self], trial: Trial, tune_store: bool) -> Self:
+        return cls(
+            bypass_daemon=tune_store and trial.suggest_categorical("bypass_daemon", ["true", "false"]) == "true",
+            gc_dont_gc=trial.suggest_categorical("gc_dont_gc", ["true", "false"]) == "true",
+            memory_allocator=cast(
+                MemoryAllocator, trial.suggest_categorical("memory_allocator", sorted(MemoryAllocators))
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True, eq=True, order=True)
 class Objective:
     flakeref: str
     attr_path: Sequence[str]
@@ -101,21 +118,22 @@ class Objective:
     def __post_init__(self) -> None:
         object.__setattr__(self, "artifact_store", FileSystemArtifactStore(self.artifact_dir))
 
-    def __call__(self, trial: Trial) -> float:
+    @staticmethod
+    def _build_env(params: Params) -> Mapping[str, str]:
         env: dict[str, str] = {}
-
-        if self.tune_store:
-            bypass_daemon = trial.suggest_categorical("bypass_daemon", ["true", "false"]) == "true"
-        else:
-            bypass_daemon = False
 
         # NOTE: Boehm GC just checks if the environment variable is set, not that it is set to a specific value.
         # TODO: Web dashboard struggles with booleans? Seeing empty spaces in the table.
-        if trial.suggest_categorical("gc_dont_gc", ["true", "false"]) == "true":
+        if params.gc_dont_gc:
             env["GC_DONT_GC"] = "1"
 
         # Measured in bytes -- 32M through 8G
-        # gc_initial_heap_size = trial.suggest_int("gc_initial_heap_size", 32 * 1024 * 1024, 8 * 1024 * 1024 * 1024, log=True)
+        # gc_initial_heap_size = trial.suggest_int(
+        #     "gc_initial_heap_size",
+        #     32 * 1024 * 1024,
+        #     8 * 1024 * 1024 * 1024,
+        #     log=True,
+        # )
         # env["GC_INITIAL_HEAP_SIZE"] = str(gc_initial_heap_size)
 
         # GC_MAXIMUM_HEAP_SIZE is zero by default, which means unlimited.
@@ -132,41 +150,12 @@ class Objective:
         # GC_ENABLE_INCREMENTAL is off by default.
         # gc_enable_incremental = trial.suggest_categorical("gc_enable_incremental", [True, False])
 
-        env["LD_PRELOAD"] = get_memory_allocator_ld_preload(
-            cast(MemoryAllocator, trial.suggest_categorical("memory_allocator", sorted(MemoryAllocators)))
-        )
+        if params.memory_allocator != "system":
+            env["LD_PRELOAD"] = get_memory_allocator_ld_preload(params.memory_allocator)
 
-        # Short-circuit if the trial is a duplicate.
-        # Fetch all the trials to consider.
-        # for t in reversed(trial.study.get_trials(deepcopy=False, states=(TrialState.COMPLETE,))):
-        #     # TODO: Match on `t.state` and set state of new trial appropriately.
-        #     if trial.params == t.params and t.value is not None:
-        #         # Use the existing value as trial duplicated the parameters.
-        #         return t.value
+        return env
 
-        LOGGER.info("Running trial %d with parameters: %s", trial.number, trial.params)
-
-        results: list[RawNixEvalResult] = []
-        for i in range(self.num_evals):
-            LOGGER.info("Running evaluation %d of %d", i + 1, self.num_evals)
-            intermediate_result = tune_nix_eval.nix.eval.raw.eval(
-                self.flakeref, self.attr_path, local_store=bypass_daemon, env=env, timeout=self.eval_timeout
-            )
-
-            # Fail due to timeout
-            if intermediate_result is None:
-                raise optuna.TrialPruned()
-            # Fail due to eval error
-            elif intermediate_result.value is None:
-                trial.set_user_attr("stderr", intermediate_result.stderr)
-                raise optuna.TrialPruned()
-
-            # if trial.should_prune():
-            #     raise optuna.TrialPruned()
-
-            trial.report(intermediate_result.wall_time, i)
-            results.append(intermediate_result)
-
+    def _finish_trial(self, trial: Trial, results: list[RawNixEvalResult]) -> float:
         LOGGER.info("Generating statistics")
         description = NixEvalStatsDescription.of(results)
 
@@ -184,6 +173,48 @@ class Objective:
 
         trial.set_user_attr("artifact_id", artifact_id)
         return description.wall_time.median
+
+    def __call__(self, trial: Trial) -> float:
+        params = Params.sample_from(trial, self.tune_store)
+        env = self._build_env(params)
+
+        # Short-circuit if the trial is a duplicate.
+        # Fetch all the trials to consider.
+        # for t in reversed(trial.study.get_trials(deepcopy=False, states=(TrialState.COMPLETE,))):
+        #     # TODO: Match on `t.state` and set state of new trial appropriately.
+        #     if trial.params == t.params and t.value is not None:
+        #         # Use the existing value as trial duplicated the parameters.
+        #         return t.value
+
+        LOGGER.info("Running trial %d with parameters: %s", trial.number, trial.params)
+
+        results: list[RawNixEvalResult] = []
+        for i in range(self.num_evals):
+            LOGGER.info("Running evaluation %d of %d", i + 1, self.num_evals)
+            intermediate_result = tune_nix_eval.nix.eval.raw.eval(
+                self.flakeref, self.attr_path, local_store=params.bypass_daemon, env=env, timeout=self.eval_timeout
+            )
+
+            if intermediate_result is None:
+                LOGGER.error("Pruning trial %d due to timeout", trial.number)
+                raise optuna.TrialPruned()
+
+            if intermediate_result.value is None:
+                LOGGER.error("Pruning trial %d due to eval error", trial.number)
+                raise optuna.TrialPruned()
+
+            # Trial completed at least, so report the wall time.
+            trial.report(intermediate_result.wall_time, i)
+            results.append(intermediate_result)
+
+            # Return the current predicted value instead of raising `TrialPruned`.
+            # This is a workaround to tell the Optuna about the evaluation
+            # results in pruned trials.
+            if trial.should_prune():
+                LOGGER.info("Pruning trial %d per pruner's suggestion", trial.number)
+                return self._finish_trial(trial, results)
+
+        return self._finish_trial(trial, results)
 
 
 def main() -> None:
@@ -210,20 +241,11 @@ def main() -> None:
     LOGGER.info("Warming up")
     _ = tune_nix_eval.nix.eval.raw.eval(flakeref, attr_path)
 
-    optuna.logging.get_logger("optuna").addHandler(_HANDLER)
     study = optuna.create_study(
         direction="minimize",
         storage="sqlite:///nix-eval.db",
         study_name="nix-eval",
-        # TODO(@connorbaker):
-        # Swithc to Wilcoxon pruner since it is appropriate for objective functions which average multiple evaluations.
-        # https://optuna.readthedocs.io/en/stable/tutorial/20_recipes/013_wilcoxon_pruner.html#sphx-glr-tutorial-20-recipes-013-wilcoxon-pruner-py
-        # pruner=MedianPruner(
-        #     # Start pruning essentially immediately since we have our baseline trial enqueued.
-        #     n_startup_trials=1,
-        #     # Start pruning decisions on the third step of a trial
-        #     n_warmup_steps=2,
-        # ),
+        pruner=WilcoxonPruner(p_threshold=0.1, n_startup_steps=0),
         # sampler=TPESampler(seed=42),
         sampler=BruteForceSampler(seed=42),
     )
@@ -235,7 +257,9 @@ def main() -> None:
     #     # https://github.com/NixOS/nix/blob/dfd0033afbbb12e6578ab3f1f026d15ff9dec132/src/libexpr/eval-gc.cc#L65
     #     "gc_initial_heap_size": 32 * 1024 * 1024,
     # })
-    study.enqueue_trial({"memory_allocator": "system", "gc_dont_gc": "false", "bypass_daemon": "false"})
+    study.enqueue_trial(
+        {"memory_allocator": "system", "gc_dont_gc": "false"} | ({"bypass_daemon": "false"} if args.tune_store else {})
+    )
 
     study.optimize(
         Objective(

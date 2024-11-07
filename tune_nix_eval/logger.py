@@ -4,24 +4,24 @@ import rich.logging
 
 LOGGING_LEVEL = logging.INFO
 
-_CONSOLE = rich.console.Console(
+CONSOLE = rich.console.Console(
     color_system=None,
     emoji=False,
     highlight=False,
     markup=False,
     stderr=True,
 )
-_HANDLER = rich.logging.RichHandler(
-    console=_CONSOLE,
+HANDLER = rich.logging.RichHandler(
+    console=CONSOLE,
     rich_tracebacks=True,
     show_time=False,
 )
-_HANDLER.setFormatter(logging.Formatter("%(message)s"))
+HANDLER.setFormatter(logging.Formatter("%(message)s"))
 
 
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(LOGGING_LEVEL)
-    logger.addHandler(_HANDLER)
+    logger.addHandler(HANDLER)
 
     return logger
