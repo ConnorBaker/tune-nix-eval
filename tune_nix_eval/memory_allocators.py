@@ -18,8 +18,7 @@ NixProvidedMemoryAllocator = Literal[
     "jemalloc",
     "libc",
     "mimalloc",
-    "scudo-14",
-    "scudo-19",
+    "scudo-19",  # NOTE: scudo-14 was removed due to frequent timeouts.
     "tcmalloc",
 ]
 NixProvidedMemoryAllocators: Set[NixProvidedMemoryAllocator] = set(NixProvidedMemoryAllocator.__args__)
@@ -47,8 +46,6 @@ def get_memory_allocator_attr_path(memory_allocator: MemoryAllocator) -> None | 
             return ["glibc"]
         case "mimalloc":
             return ["mimalloc"]
-        case "scudo-14":
-            return ["llvmPackages_14", "compiler-rt"]
         case "scudo-19":
             return ["llvmPackages_19", "compiler-rt"]
         case "system":
@@ -80,8 +77,6 @@ def get_memory_allocator_lib_path(memory_allocator: MemoryAllocator) -> None | s
             return "lib/libc.so.6"
         case "mimalloc":
             return "lib/libmimalloc.so"
-        case "scudo-14":
-            return "lib/linux/libclang_rt.scudo-x86_64.so"
         case "scudo-19":
             return "lib/linux/libclang_rt.scudo_standalone-x86_64.so"
         case "system":
@@ -106,7 +101,10 @@ def ensure_memory_allocator_store_path(memory_allocator: MemoryAllocator) -> Non
         return None
 
     result = tune_nix_eval.nix.build.raw.build(".", get_memory_allocator_attr_path(memory_allocator))
-    return result.value.outputs["out"]
+    if result.value is None:
+        LOGGER.error("Failed to build %s: %s", memory_allocator, result.stderr)
+        raise RuntimeError(f"Failed to build {memory_allocator}")
+    return result.value.outputs.get("out")
 
 
 @overload

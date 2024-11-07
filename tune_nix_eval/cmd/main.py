@@ -28,8 +28,9 @@ LOGGER: Final[Logger] = get_logger(__name__)
 
 # TODO(@connorbaker):
 # 0. Set CPU governor to performance to avoid fluctuations in CPU frequency.
-# 1. Tune zram and compression algorithm parameters
-# 2. Visualizations of memory usage (add snapshot time relative to program start to memory_stats)
+# 1. Track wall time, which is not what Nix reports (due to IFD or GC pauses?).
+# 2. Tune zram and compression algorithm parameters
+# 3. Visualizations of memory usage (add snapshot time relative to program start to memory_stats)
 
 
 def setup_argparse() -> ArgumentParser:
@@ -49,7 +50,7 @@ def setup_argparse() -> ArgumentParser:
     _ = parser.add_argument(
         "--eval-timeout",
         type=float,
-        help="Timeout for each evaluation, in seconds",
+        help="Timeout for each evaluation, in seconds. Note that this is wall time, not CPU time as reported by Nix.",
         default=None,
     )
     _ = parser.add_argument(
@@ -191,8 +192,6 @@ def main() -> None:
     flakeref = args.flakeref
     attr_path = args.attr_path
 
-    # TODO(@connorbaker):
-    # echo "1" | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo
     no_turbo_path = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
     if not args.allow_turbo and no_turbo_path.exists() and no_turbo_path.read_text().strip() != "1":
         LOGGER.error("Turbo mode is enabled. Results will not be accurate.")
@@ -240,12 +239,12 @@ def main() -> None:
 
     study.optimize(
         Objective(
-            flakeref,
-            attr_path,
-            args.num_evals,
-            args.eval_timeout,
-            args.tune_store,
-            artifact_dir,
+            flakeref=flakeref,
+            attr_path=attr_path,
+            num_evals=args.num_evals,
+            eval_timeout=args.eval_timeout,
+            tune_store=args.tune_store,
+            artifact_dir=artifact_dir,
         ),
         n_trials=args.num_trials,
     )

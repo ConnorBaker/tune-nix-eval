@@ -139,7 +139,7 @@ def eval(
 
         kwargs["memory_stats"] = memory_stats
         kwargs["stats"] = NixEvalStats.model_validate_json(stats_file.read())
-        kwargs["stderr"] = str(proc.stderr)
+        kwargs["stderr"] = str(proc.stderr.read())
         if returncode != 0:
             LOGGER.error("Evaluation failed: %s", kwargs["stderr"])
             kwargs["value"] = None
