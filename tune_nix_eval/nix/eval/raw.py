@@ -135,7 +135,6 @@ def eval(
                 monitor_thread.join(0.0)
             except psutil.TimeoutExpired:
                 pass
-            LOGGER.error("Evaluation timed out")
             return None
 
         kwargs["memory_stats"] = memory_stats
