@@ -47,6 +47,12 @@ def setup_argparse() -> ArgumentParser:
         default=5,
     )
     _ = parser.add_argument(
+        "--eval-timeout",
+        type=float,
+        help="Timeout for each evaluation, in seconds",
+        default=None,
+    )
+    _ = parser.add_argument(
         "--allow-turbo",
         action="store_true",
         help="Allow the CPU to boost its frequency. Recommended to disable for consistent results.",
@@ -84,6 +90,7 @@ class Objective:
     flakeref: str
     attr_path: Sequence[str]
     num_evals: int
+    eval_timeout: None | float
     tune_store: bool
     artifact_dir: Path
 
@@ -96,9 +103,10 @@ class Objective:
     def __call__(self, trial: Trial) -> float:
         env: dict[str, str] = {}
 
-        bypass_daemon = (
-            trial.suggest_categorical("bypass_daemon", (["true"] if self.tune_store else []) + ["false"]) == "true"
-        )
+        if self.tune_store:
+            bypass_daemon = trial.suggest_categorical("bypass_daemon", ["true", "false"]) == "true"
+        else:
+            bypass_daemon = False
 
         # NOTE: Boehm GC just checks if the environment variable is set, not that it is set to a specific value.
         # TODO: Web dashboard struggles with booleans? Seeing empty spaces in the table.
@@ -135,11 +143,13 @@ class Objective:
         #         # Use the existing value as trial duplicated the parameters.
         #         return t.value
 
+        LOGGER.info("Running trial %d with parameters: %s", trial.number, trial.params)
+
         results: list[RawNixEvalResult] = []
         for i in range(self.num_evals):
             LOGGER.info("Running evaluation %d of %d", i + 1, self.num_evals)
             intermediate_result = tune_nix_eval.nix.eval.raw.eval(
-                self.flakeref, self.attr_path, local_store=bypass_daemon, env=env
+                self.flakeref, self.attr_path, local_store=bypass_daemon, env=env, timeout=self.eval_timeout
             )
             if intermediate_result.value is None:
                 LOGGER.error("Evaluation failed: %s", intermediate_result.stderr)
@@ -229,6 +239,7 @@ def main() -> None:
             flakeref,
             attr_path,
             args.num_evals,
+            args.eval_timeout,
             args.tune_store,
             artifact_dir,
         ),

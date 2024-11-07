@@ -55,6 +55,7 @@ def eval(
     attr_path: Iterable[str],
     local_store: bool = False,
     env: Mapping[str, str] = {},
+    timeout: None | float = None,
 ) -> RawNixEvalResult:
     # TODO: Escaping of flakeref and attr_path is correct?
     full_ref: str = f"{flakeref}#{show_attr_path(attr_path)}"
@@ -73,10 +74,8 @@ def eval(
                 # "--pure-eval",
                 # "--read-only",
                 "--no-eval-cache",
-                "--store",
-                ("local" if local_store else "auto"),
-                "--eval-store",
-                ("local" if local_store else "auto"),
+                # Store options
+                *(["--store", "local", "--eval-store", "local"] if local_store else []),
                 # Prevent remote builders when doing IFD
                 "--builders",
                 "''",
@@ -103,18 +102,26 @@ def eval(
                 memory_stats,
             ),
         )
-        monitor_thread.start()
 
         # Wait for the process to finish
-        proc.wait()
-
-        # Stop monitoring memory usage
-        monitor_thread.join()
+        try:
+            monitor_thread.start()
+            returncode = proc.wait(timeout)
+            monitor_thread.join()
+        except psutil.TimeoutExpired:
+            LOGGER.error("Evaluation timed out")
+            proc.kill()
+            monitor_thread.join()
+            returncode = None
 
         kwargs["memory_stats"] = memory_stats
         kwargs["stats"] = NixEvalStats.model_validate_json(stats_file.read())
         kwargs["stderr"] = str(proc.stderr)
-        if proc.returncode != 0:
+
+        if returncode is None:
+            LOGGER.error("Evaluation timed out")
+            kwargs["value"] = None
+        elif returncode != 0:
             LOGGER.error("Evaluation failed: %s", kwargs["stderr"])
             kwargs["value"] = None
         else:
