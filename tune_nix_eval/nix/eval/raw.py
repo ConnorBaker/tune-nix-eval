@@ -111,7 +111,10 @@ def eval(
         except psutil.TimeoutExpired:
             LOGGER.error("Evaluation timed out")
             proc.kill()
-            monitor_thread.join()
+            try:
+                monitor_thread.join(0.0)
+            except psutil.TimeoutExpired:
+                pass
             returncode = None
 
         kwargs["memory_stats"] = memory_stats
