@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from logging import Logger
 from subprocess import PIPE
 from tempfile import NamedTemporaryFile
-from typing import Any, Final
+from typing import Any, Final, overload
 
 import psutil
 from pydantic.alias_generators import to_camel
@@ -50,13 +50,33 @@ def monitor_memory(pid: int, memory_stats: list[MemoryProcessStats], interval: f
         time.sleep(interval)
 
 
+@overload
+def eval(
+    flakeref: str,
+    attr_path: Iterable[str],
+    local_store: bool = False,
+    env: Mapping[str, str] = {},
+    timeout: None = ...,
+) -> RawNixEvalResult: ...
+
+
+@overload
+def eval(
+    flakeref: str,
+    attr_path: Iterable[str],
+    local_store: bool = False,
+    env: Mapping[str, str] = {},
+    timeout: float = ...,
+) -> None | RawNixEvalResult: ...
+
+
 def eval(
     flakeref: str,
     attr_path: Iterable[str],
     local_store: bool = False,
     env: Mapping[str, str] = {},
     timeout: None | float = None,
-) -> RawNixEvalResult:
+) -> None | RawNixEvalResult:
     # TODO: Escaping of flakeref and attr_path is correct?
     full_ref: str = f"{flakeref}#{show_attr_path(attr_path)}"
     LOGGER.info("Evaluating %s", full_ref)
@@ -115,16 +135,13 @@ def eval(
                 monitor_thread.join(0.0)
             except psutil.TimeoutExpired:
                 pass
-            returncode = None
+            LOGGER.error("Evaluation timed out")
+            return None
 
         kwargs["memory_stats"] = memory_stats
         kwargs["stats"] = NixEvalStats.model_validate_json(stats_file.read())
         kwargs["stderr"] = str(proc.stderr)
-
-        if returncode is None:
-            LOGGER.error("Evaluation timed out")
-            kwargs["value"] = None
-        elif returncode != 0:
+        if returncode != 0:
             LOGGER.error("Evaluation failed: %s", kwargs["stderr"])
             kwargs["value"] = None
         else:
