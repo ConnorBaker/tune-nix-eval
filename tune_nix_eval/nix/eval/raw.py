@@ -150,6 +150,9 @@ def eval(
 
         # Limit CPU affinity to the first core
         proc.cpu_affinity([0])
+        # Make sure the process has priority
+        proc.nice(-20)
+        proc.ionice(psutil.IOPRIO_CLASS_RT, 0)
 
         # Start monitoring memory usage
         # NOTE: memory_stats is mutated by monitor_memory.
